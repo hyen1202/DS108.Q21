@@ -1,0 +1,163 @@
+import pandas as pd
+import numpy as np
+import re
+import html
+import unicodedata
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import scipy.sparse as sp
+
+class CleaningPipeline:
+    def __init__(self, filepath, near_dup_threshold=0.90):
+        """
+        Khởi tạo Pipeline làm sạch dữ liệu.
+        :param filepath:            Đường dẫn tới file dữ liệu thô (.csv)
+        :param near_dup_threshold:  Ngưỡng quyết định trùng mờ chéo sàn (Mục 8)
+        """
+        self.filepath        = filepath
+        self.dup_threshold   = near_dup_threshold
+        self.df              = None
+        self.log             = {}
+
+    def run_pipeline(self):
+
+        # 1. Load & snapshot ban đầu
+        self.df = pd.read_csv(self.filepath)
+        self.log['rows_initial'] = len(self.df)
+        self.log['cols_initial'] = list(self.df.columns)
+
+        # 2. Dedup cột gốc 
+        rows_before_exact = len(self.df)
+        self.df = self.df.drop_duplicates(subset=['title'], keep='first')
+        self.log['dedup_exact_removed'] = rows_before_exact - len(self.df)
+
+        # 3. Xử lý missing values
+        rows_before_missing = len(self.df)
+        self.df = self.df.dropna(subset=['title', 'price'])
+        self.df['brand'] = self.df['brand'].fillna('No Brand')
+        self.log['missing_handle_removed'] = rows_before_missing - len(self.df)
+        self.log['rows_after_missing'] = len(self.df)
+
+        # Áp dụng hàm làm sạch tích hợp cho từng tiêu đề (Bao gồm các mục 4, 5, 6)
+        self.df['title_clean'] = self.df['title'].apply(self._clean_text_logic)
+
+        # 7. Dedup sau normalize (Gộp các trường hợp trùng lặp format)
+        rows_before_norm_dedup = len(self.df)
+        self.df['title_lower_tmp'] = self.df['title_clean'].str.lower().str.strip()
+        self.df = self.df.drop_duplicates(subset=['title_lower_tmp'], keep='first')
+        self.df = self.df.drop(columns=['title_lower_tmp'])
+        self.log['dedup_normalize_removed'] = rows_before_norm_dedup - len(self.df)
+
+        # 8. Near-duplicate detection (cross-platform) — TF-IDF + Cosine
+        self.df = self._remove_near_duplicates_logic()
+
+        # 9. Chuẩn hóa brand
+        self.df['brand_clean'] = self.df['brand'].apply(self._clean_brand_logic)
+
+        # Tính word_count sạch hỗ trợ vẽ Boxplot
+        self.df['word_count'] = self.df['title_clean'].str.split().str.len()
+
+        # 10. Cleaning log & báo cáo cuối
+        self._generate_final_report()
+
+        return self.df
+        
+
+    def _clean_text_logic(self, text):
+        if not isinstance(text, str):
+            return ""
+
+        # 4. Unicode NFC normalization
+        text = unicodedata.normalize('NFC', text)
+        text = html.unescape(text)
+
+        # 5. Làm sạch noise ký tự (HTML tag, SĐT, emoji, ký tự rác)
+        text = re.sub(r'<[^>]+>', ' ', text)                    # Xóa thẻ HTML
+        text = re.sub(r'@[0-9\._\s\-\+]+', ' ', text)           # SĐT ẩn dạng @392...
+        text = re.sub(r'(?<!\d)(0|\+84)\d{9,10}(?!\d)', ' ', text)  # SĐT thường 
+        text = re.sub(r'https?://\S+|www\.\S+', ' ', text)      # Xóa link website
+        text = re.sub(r'_', ' ', text)                          # Thay dưới bằng khoảng trắng
+
+        # Loại bỏ Emoji và ký tự đặc biệt
+        text = re.sub(r'[^\w\s,.\/\"\'\–%\‑\°×\+&:*\>\″\”\℃\-]', ' ', text)
+                         
+        # 6. Chuẩn hóa khoảng trắng
+        text = re.sub(r'\s+', ' ', text).strip()
+
+        return text
+
+    # ------------------------------------------------------------------
+    def _remove_near_duplicates_logic(self):
+        """
+        Near-duplicate detection chéo sàn bằng TF-IDF + Cosine Similarity.
+        """
+        titles    = self.df['title_clean'].tolist()
+        platforms = self.df['platform'].tolist()
+
+        # Vector hóa toàn bộ title
+        vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(3, 4))
+        tfidf_matrix = vectorizer.fit_transform(titles)
+
+        # Tính cosine similarity theo batch để tiết kiệm RAM
+        BATCH = 1000
+        indices_to_drop = set()
+        n = len(titles)
+
+        for start in range(0, n, BATCH):
+            end = min(start + BATCH, n)
+            # Cosine giữa batch[start:end] vs toàn bộ phía sau (upper-triangle)
+            batch_matrix = tfidf_matrix[start:end]
+            sim_block     = cosine_similarity(batch_matrix, tfidf_matrix[start:])
+            # sim_block shape: (end-start) x (n-start)
+
+            rows_block, cols_block = sp.coo_matrix(
+                sim_block > self.dup_threshold
+            ).nonzero()
+
+            for r, c in zip(rows_block, cols_block):
+                i = start + r
+                j = start + c          # c là offset từ `start`
+                if i >= j:             # chỉ xét upper-triangle
+                    continue
+                if i in indices_to_drop or j in indices_to_drop:
+                    continue
+                if platforms[i] != platforms[j]:
+                    indices_to_drop.add(j)
+
+        self.log['near_duplicates_removed'] = len(indices_to_drop)
+        return self.df.drop(index=list(indices_to_drop)).reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    def _clean_brand_logic(self, brand_name):
+        if not isinstance(brand_name, str):
+            return "no brand"
+        b_clean = re.sub(r'[\t\n\r]+', ' ', brand_name)
+        b_clean = re.sub(r'\s+', ' ', b_clean).strip()
+        b_lower = b_clean.lower()
+
+        if b_lower in ['nobrand', 'no brand']:
+            return "no brand"
+        if b_lower in ['locknlock', 'lock&lock', 'lock & lock']:
+            return 'locknlock'
+
+        return b_lower
+
+    # ------------------------------------------------------------------
+    def _generate_final_report(self):
+        final_rows   = len(self.df)
+        total_deleted = self.log['rows_initial'] - final_rows
+
+        print("\n" + "="*55)
+        print("BÁO CÁO PIPELINE LÀM SẠCH VÀ GHI LOG CUỐI")
+        print("="*55)
+        print(f"   Tổng số mẫu snapshot ban đầu:      {self.log['rows_initial']} dòng")
+        print(f"   Đã xóa trùng lặp tuyệt đối gốc:    {self.log['dedup_exact_removed']} dòng")
+        print(f"   Đã xử lý missing value (MCAR):      {self.log['missing_handle_removed']} dòng")
+        print(f"   Chuẩn hóa NFC, xóa emoji, ký tự đặc biệt:   [DONE]")
+        print(f"   Đã xóa trùng sau chuẩn hóa text:   {self.log['dedup_normalize_removed']} dòng")
+        print(f"   Đã xóa trùng mờ chéo nền tảng:     {self.log['near_duplicates_removed']} dòng")
+        print(f"   Chuẩn hóa cột 'brand':         [DONE]")
+        print("-"*55)
+        print(f" TỔNG SỐ DÒNG DATASET SẠCH CUỐI CÙNG:          {final_rows} dòng")
+        print(f" Tỷ lệ dữ liệu nhiễu bị tinh lọc:              -{round((total_deleted/self.log['rows_initial'])*100, 2)}%")
+        print("="*55 + "\n")
