@@ -8,6 +8,31 @@ from sklearn.metrics.pairwise import cosine_similarity
 import scipy.sparse as sp
 
 class CleaningPipeline:
+
+    ELECTRONICS_LIST = [
+        'thiết bị số - phụ kiện số', 'laptop - máy vi tính - linh kiện', 
+        'điện tử - điện lạnh', 'máy ảnh - máy quay phim', 
+        'điện thoại - máy tính bảng', 'thiết bị điện tử', 'phụ kiện điện tử'
+    ]
+
+    FASHION_LIST = [
+        'phụ kiện thời trang', 'thời trang nữ', 'đồng hồ và trang sức',
+        'thời trang nam', 'balo và vali', 'giày - dép nam',
+        'túi thời trang nam', 'túi thời trang nữ', 'giày - dép nữ',
+        'thời trang & phụ kiện trẻ em', 'thời trang & phụ kiện nam',
+        'thời trang & phụ kiện nữ'
+    ]
+
+    HOMELIVING_LIST = [
+        'nhà cửa - đời sống', 'điện gia dụng', 'chăm sóc nhà cửa',
+        'hàng gia dụng & đời sống', 'tv & thiết bị điện gia dụng'
+    ]
+
+    BEAUTY_LIST = [
+        'làm đẹp - sức khỏe', 'sức khỏe & làm đẹp'
+    ]
+
+
     def __init__(self, filepath, near_dup_threshold=0.90):
         """
         Khởi tạo Pipeline làm sạch dữ liệu.
@@ -54,6 +79,24 @@ class CleaningPipeline:
         # 8. Near-duplicate detection (cross-platform) — TF-IDF + Cosine
         self.df = self._remove_near_duplicates_logic()
 
+        # GÁN NHÓM NGÀNH
+        if 'category_l1' in self.df.columns:
+            # Ép hạ thường an toàn cho khâu so khớp isin
+            self.df['category_l1_lower_tmp'] = self.df['category_l1'].astype(str).str.lower().str.strip()
+            self.df['industry_group'] = self.df['category_l1_lower_tmp'].apply(self._map_industry_group_logic)
+            self.df = self.df.drop(columns=['category_l1_lower_tmp'])
+        else:
+            self.df['industry_group'] = 'other'
+
+        # Lưu thông tin phân phối phân tầng nhóm ngành phục vụ ghi log
+        self.log['industry_distribution'] = self.df['industry_group'].value_counts().to_dict()
+
+        # Tạo số thứ tự tăng dần định dạng 5 chữ số (00001, 00002...)
+        zero_padded_seq = np.arange(1, len(self.df) + 1)
+        zero_padded_seq = [f"{x:05d}" for x in zero_padded_seq]
+        # Kết hợp ra ID cứng (Ví dụ: lazada_00001, tiki_03300)
+        self.df['id'] = self.df['platform'].astype(str) + "_" + zero_padded_seq
+
         # 9. Chuẩn hóa brand
         self.df['brand_clean'] = self.df['brand'].apply(self._clean_brand_logic)
 
@@ -89,7 +132,19 @@ class CleaningPipeline:
 
         return text
 
-    # ------------------------------------------------------------------
+    def _map_industry_group_logic(self, cat_l1_lower):
+        # Hàm ánh xạ động từ danh mục cấp 1 về nhóm ngành lớn
+        if cat_l1_lower in self.ELECTRONICS_LIST:
+            return 'electronics & tech'
+        elif cat_l1_lower in self.FASHION_LIST:
+            return 'fashion & accessories'
+        elif cat_l1_lower in self.HOMELIVING_LIST:
+            return 'home & living'
+        elif cat_l1_lower in self.BEAUTY_LIST:
+            return 'beauty & health'
+        else:
+            return 'other'
+
     def _remove_near_duplicates_logic(self):
         """
         Near-duplicate detection chéo sàn bằng TF-IDF + Cosine Similarity.
@@ -160,6 +215,11 @@ class CleaningPipeline:
         print(f"   Đã xóa trùng sau chuẩn hóa text:   {self.log['dedup_normalize_removed']} dòng")
         print(f"   Đã xóa trùng mờ chéo nền tảng:     {self.log['near_duplicates_removed']} dòng")
         print(f"   Chuẩn hóa cột 'brand':         [DONE]")
+        print(f"   Tự động gán nhãn 'id' độc nhất:    [DONE]")
+        print("-"*55)
+        print(" THỐNG KÊ PHÂN PHỐI NHÓM NGÀNH (INDUSTRY GROUP):")
+        for group, count in self.log.get('industry_distribution', {}).items():
+            print(f"    - {group}: {count} dòng ({round((count/final_rows)*100, 2)}%)")
         print("-"*55)
         print(f" TỔNG SỐ DÒNG DATASET SẠCH CUỐI CÙNG:          {final_rows} dòng")
         print(f" Tỷ lệ dữ liệu nhiễu bị tinh lọc:              -{round((total_deleted/self.log['rows_initial'])*100, 2)}%")
