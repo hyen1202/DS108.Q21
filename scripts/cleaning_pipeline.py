@@ -48,6 +48,9 @@ class CleaningPipeline:
         self.df = self.df.drop(columns=['title_lower_tmp'])
         self.log['dedup_normalize_removed'] = rows_before_norm_dedup - len(self.df)
 
+        # Reset index phẳng trước khi chạy thuật toán Trùng Mờ
+        self.df = self.df.reset_index(drop=True)
+
         # 8. Near-duplicate detection (cross-platform) — TF-IDF + Cosine
         self.df = self._remove_near_duplicates_logic()
 
@@ -79,7 +82,7 @@ class CleaningPipeline:
         text = re.sub(r'_', ' ', text)                          # Thay dưới bằng khoảng trắng
 
         # Loại bỏ Emoji và ký tự đặc biệt
-        text = re.sub(r'[^\w\s,.\/\"\'\–%\‑\°×\+&:*\>\″\”\℃\-]', ' ', text)
+        text = re.sub(r'[^\w\s,.\/\"\'\–%\‑\°×\+&:*\″\”\℃\-]', ' ', text)
                          
         # 6. Chuẩn hóa khoảng trắng
         text = re.sub(r'\s+', ' ', text).strip()
