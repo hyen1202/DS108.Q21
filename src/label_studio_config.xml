@@ -1,0 +1,31 @@
+<!--
+  VEC-NER — Label Studio Labeling Config v4.2
+  Dynamic span labels by industry + wrong-industry/adjudication flags
+-->
+
+<View>
+  <!-- Context Header: industry · breadcrumb · brand -->
+  <View style="background:#f8f9fa; border-left:5px solid #343a40; padding:8px 12px; margin-bottom:12px; border-radius:4px;">
+    <Text name="context_header" value="$context_header" style="font-size:12px; color:#495057; font-weight:500;"/>
+  </View>
+
+  <!-- Text cần gán nhãn span-level NER -->
+  <Text name="text" value="$text" style="font-size:15px; line-height:1.6;"/>
+
+  <!-- Dynamic span labels. O = không bôi đen, không đưa vào nút nhãn. -->
+  <Labels name="label" toName="text" value="$labels_for_task" allowEmpty="true" style="display:flex; flex-wrap:wrap; gap:6px; margin:12px 0;"/>
+
+  <!-- Task-level flags sau khi gán xong -->
+  <View style="margin-top:10px; padding:8px 12px; background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px;">
+    <Header value="Flags sau khi gán" size="5"/>
+    <Choices name="quality_flags" toName="text" choice="multiple" showInline="true">
+      <Choice value="WRONG_INDUSTRY" alias="Sai ngành hàng"/>
+      <Choice value="NEEDS_ADJUDICATION" alias="Không chắc / cần adjudication"/>
+    </Choices>
+  </View>
+
+  <!-- Hotkey hint -->
+  <View style="margin-top:8px; padding:8px 12px; background:#fff3cd; border:1px solid #ffeaa7; border-radius:6px; font-size:12px; color:#856404;">
+    <Text name="hotkey_hint" value="$hotkey_hint"/>
+  </View>
+</View>

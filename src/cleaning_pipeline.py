@@ -224,3 +224,26 @@ class CleaningPipeline:
         print(f" TỔNG SỐ DÒNG DATASET SẠCH CUỐI CÙNG:          {final_rows} dòng")
         print(f" Tỷ lệ dữ liệu nhiễu bị tinh lọc:              -{round((total_deleted/self.log['rows_initial'])*100, 2)}%")
         print("="*55 + "\n")
+
+
+if __name__ == "__main__":
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="Run the cleaning pipeline on merged e-commerce product titles.")
+    parser.add_argument("--input", "-i", default="data/merged/all_platforms_merged_v2.csv", help="Path to input merged CSV file")
+    parser.add_argument("--output", "-o", default="data/processed/data_cleaned.csv", help="Path to save cleaned CSV file")
+    parser.add_argument("--threshold", "-t", type=float, default=0.90, help="Near-duplicate cosine similarity threshold (default: 0.90)")
+    args = parser.parse_args()
+
+    if not os.path.exists(args.input):
+        print(f"Error: Input file '{args.input}' does not exist.")
+        exit(1)
+
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+
+    print(f"Running Cleaning Pipeline on: {args.input}")
+    pipeline = CleaningPipeline(filepath=args.input, near_dup_threshold=args.threshold)
+    df_clean = pipeline.run_pipeline()
+    df_clean.to_csv(args.output, index=False, encoding="utf-8-sig")
+    print(f"✅ Successfully processed and saved cleaned data to: {args.output}")
